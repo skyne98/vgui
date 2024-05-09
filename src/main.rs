@@ -35,7 +35,62 @@ fn main() -> Result<()> {
     };
 
     // Try to initialize the Vue app
-    match context.eval(Source::from_bytes("Vue.createApp({}).mount('#app')")) {
+    match context.eval(Source::from_bytes(
+        r#"
+        const { createRenderer, defineComponent, h } = Vue;
+
+        const nodeOps = {
+            // Create a node in the non-DOM environment
+            createElement(tag) {
+                console.log(`Creating element: ${tag}`);
+                // Return an object that represents your element
+                return { tag, children: [], attributes: {} };
+            },
+            // Insert child into parent, possibly using some custom API
+            insert(child, parent, anchor) {
+                console.log(`Inserting element: ${child.tag}`);
+                parent.children.push(child);
+            },
+            // Remove an element, adapting to your backend's capabilities
+            remove(child) {
+                console.log(`Removing element: ${child.tag}`);
+                // Implement removal logic according to your environment
+            },
+            createText(text) {
+                console.log(`Creating text node: ${text}`);
+                return { type: 'text', text };
+            },
+            setText(node, text) {
+                console.log(`Setting text: ${text}`);
+                node.text = text;
+            },
+            patchProp(el, key, prevValue, nextValue) {
+                console.log(`Patching prop: ${key} from ${prevValue} to ${nextValue}`);
+                el.attributes[key] = nextValue;
+            }
+        };
+
+        const { render, createApp } = createRenderer(nodeOps);
+        console.log(`Renderer created: ${render}`);
+        console.log(`App creator created: ${createApp}`);
+
+        const App = {
+            render() {
+                return h('div', { id: 'main', style: 'color: red' }, [
+                    h('span', null, 'Hello, custom environment!')
+                ]);
+            }
+        };
+
+        // The 'root' object would represent the top level of your app
+        const root = { tag: 'app', children: [], attributes: {} };
+        console.log(`Root object created: ${JSON.stringify(root, null, 2)}`);
+        createApp(App).mount(root);
+
+        // For demonstration, log the root object to see the structure
+        console.log(JSON.stringify(root, null, 2));
+    "#,
+    )) {
         Ok(res) => {
             println!(
                 "{}",
