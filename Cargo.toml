@@ -11,3 +11,4 @@ rusty_v8 = "0.32.1"
 color-eyre = "0.6.3"
 eframe = { version = "0.27.2", features = ["wgpu"] }
 eyre = "0.6.12"
+colored = "2.1.0"
