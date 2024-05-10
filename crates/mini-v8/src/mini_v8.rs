@@ -246,7 +246,7 @@ impl MiniV8 {
             // let func_size = mem::size_of_val(&func); let ext_size = func_size +
             // mem::size_of::<CallbackInfo>;
             let drop_ext = Box::new(move || drop(unsafe { Box::from_raw(ptr) }));
-            // add_finalizer(scope, value, drop_ext);
+            add_finalizer(scope, value, drop_ext);
             Function {
                 mv8: self.clone(),
                 handle: v8::Global::new(scope, value),
@@ -453,6 +453,27 @@ fn initialize_slots(isolate: &mut v8::Isolate) {
 
 fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, value).expect("string exceeds maximum length")
+}
+
+fn add_finalizer<T: 'static>(
+    isolate: &mut v8::Isolate,
+    handle: impl v8::Handle<Data = T>,
+    finalizer: impl FnOnce() + 'static,
+) {
+    let rc = Rc::new(RefCell::new(None));
+    let weak = v8::Weak::with_guaranteed_finalizer(
+        isolate,
+        handle,
+        Box::new({
+            let rc = rc.clone();
+            move || {
+                let weak = rc.replace(None).unwrap();
+                finalizer();
+                drop(weak);
+            }
+        }),
+    );
+    rc.replace(Some(weak));
 }
 
 type Callback = Box<dyn Fn(&MiniV8, Value, Values) -> Result<Value>>;
