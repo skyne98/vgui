@@ -22,7 +22,7 @@ fn value_to_string(isolate: &MiniV8, value: Value, depth: usize) -> Result<Strin
         }
     } else {
         let value_string: String = value.into(isolate).expect("Failed to convert value");
-        result.push_str(&format!("{}{}\n", indent, value_string));
+        result.push_str(&format!("{}{}", indent, value_string));
     }
 
     Ok(result)
@@ -58,6 +58,7 @@ impl GuiApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self> {
         // initialize JS
         let isolate = MiniV8::new();
+        isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
         // hook up the console functions (log, warn, error, info)
         let rust_log_isolate = isolate.clone();
         let rust_log = isolate.create_function(move |invocation| {
