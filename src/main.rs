@@ -302,8 +302,14 @@ async fn main() -> Result<()> {
             println!("Has pending background tasks: {}", has_tasks);
             // run the promise microtasks
             for _ in 0..10 {
+                println!("=====================");
                 println!("Running microtasks...");
+                println!("=====================");
+                let start = std::time::Instant::now();
                 scope.perform_microtask_checkpoint();
+                let elapsed = start.elapsed();
+                println!("=====================");
+                println!("Microtasks took: {:?}", elapsed);
             }
         }
     }
