@@ -3,12 +3,14 @@ name = "vgui"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = ["crates/mini-v8"]
 
 [dependencies]
 tokio = { version = "1.37.0", features = ["full"] }
-rusty_v8 = "0.32.1"
+v8 = "0.91.1"
 color-eyre = "0.6.3"
 eframe = { version = "0.27.2", features = ["wgpu"] }
 eyre = "0.6.12"
 colored = "2.1.0"
+mini-v8 = { path = "crates/mini-v8" }
