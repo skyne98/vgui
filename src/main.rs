@@ -113,11 +113,16 @@ async fn main() -> Result<()> {
     const { render, createApp } = createRenderer(nodeOps);
 
     const App = {
-        render() {
-            return h('div', { id: 'main', style: 'color: red' }, [
-                h('span', null, 'Hello, custom environment!')
-            ]);
-        }
+        setup() {
+            const { ref, computed } = Vue;
+
+            const a = ref(1);
+            const b = ref(2);
+            const sum = computed(() => a.value + b.value);
+
+            return { sum };
+        },
+        template: '<div id="main" style="color: red"><span>Hello, sum is: {{ sum }}</span></div>',
     };
 
     // The 'root' object would represent the top level of your app
