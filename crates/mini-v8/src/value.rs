@@ -1,5 +1,8 @@
+use v8::Handle;
+
 use crate::*;
 use std::iter::FromIterator;
+use std::num::NonZero;
 use std::ops::{Deref, DerefMut};
 use std::{fmt, slice, vec};
 
@@ -237,6 +240,14 @@ impl Value {
                 })
             }),
         }
+    }
+
+    pub fn hash(&self, mv8: &MiniV8) -> usize {
+        mv8.scope(|scope| match self {
+            Value::Array(v) => v.handle.open(scope).get_hash().get() as usize,
+            Value::Object(v) => v.handle.open(scope).get_hash().get() as usize,
+            _ => unimplemented!("hashing for {:?}", self),
+        })
     }
 
     pub(crate) fn type_name(&self) -> &'static str {

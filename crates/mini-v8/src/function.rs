@@ -1,6 +1,5 @@
 use crate::*;
 use std::fmt;
-use v8;
 
 #[derive(Clone)]
 pub struct Function {
@@ -72,6 +71,15 @@ impl Function {
                 ))
             })
             .and_then(|v| v.into(&self.mv8))
+    }
+
+    pub fn name(&self) -> std::string::String {
+        self.mv8.scope(|scope| {
+            let function = v8::Local::new(scope, self.handle.clone());
+            let name = function.get_name(scope);
+            let name = name.to_rust_string_lossy(scope);
+            name
+        })
     }
 }
 

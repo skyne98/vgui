@@ -1,31 +1,150 @@
+use std::collections::HashSet;
+
+use color_eyre::owo_colors::OwoColorize;
 use eframe::egui;
 use eyre::{Context, ContextCompat, Result};
-use mini_v8::{MiniV8, ToValue, Value};
+use mini_v8::{MiniV8, Value};
 
 use colored::*;
 
-fn value_to_string(isolate: &MiniV8, value: Value, depth: usize) -> Result<String> {
-    let mut result = String::new();
+fn value_to_string(
+    isolate: &MiniV8,
+    value: Value,
+    depth: usize,
+    seen: &mut HashSet<usize>,
+    member: bool,
+) -> Result<String> {
     let indent = "  ".repeat(depth);
-    if value.is_object() {
-        result.push_str(&format!("{}Object\n", indent).green().bold());
+    let next_indent = "  ".repeat(depth + 1);
+
+    if value.is_null() {
+        return Ok(format!("{}", "null".bold()));
+    }
+
+    if value.is_boolean() {
+        let bool_value: bool = value.into(isolate).expect("Failed to convert boolean");
+        return Ok(format!("{}", bool_value.to_string().yellow()));
+    }
+
+    if value.is_number() {
+        let number_value: f64 = value.into(isolate).expect("Failed to convert number");
+        return Ok(format!("{}", number_value.to_string().yellow()));
+    }
+
+    if value.is_string() {
+        if member {
+            let string_value: String = value.into(isolate).expect("Failed to convert string");
+            return Ok(format!("\"{}\"", string_value).green().to_string());
+        } else {
+            let string_value: String = value.into(isolate).expect("Failed to convert string");
+            return Ok(format!("{}", string_value));
+        }
+    }
+
+    if value.is_function() {
+        let function = value.as_function().wrap_err("Failed to get function")?;
+        let function_name = function.name();
+        let function_name = if function_name.is_empty() {
+            "<anonymous>".to_string()
+        } else {
+            function_name
+        };
+        return Ok(format!("[Function: {}]", function_name)
+            .bold()
+            .cyan()
+            .to_string());
+    }
+
+    if value.is_array() {
+        let value_hash = value.hash(isolate);
+        if seen.contains(&value_hash) {
+            return Ok("[Circular]".bold().red().to_string());
+        }
+        seen.insert(value_hash);
+
+        let array = value.as_array().wrap_err("Failed to get array")?;
+        let length = array.len();
+
+        if length == 0 {
+            return Ok(format!("{}", "[]"));
+        }
+
+        let mut items = Vec::new();
+        for i in 0..length {
+            let item: Value = array.get(i).expect("Failed to get array item");
+            let item_string = value_to_string(isolate, item, depth + 1, seen, true)?;
+            items.push(item_string);
+        }
+
+        if length <= 3 && items.iter().map(|s| s.len()).sum::<usize>() <= 60 {
+            let inline_items = items.join(", ");
+            Ok(format!("{}", format!("[ {} ]", inline_items)))
+        } else {
+            let mut result = String::new();
+            result.push_str(&format!("{}", "[\n"));
+
+            for (i, item) in items.iter().enumerate() {
+                result.push_str(&format!("{}{}", next_indent, item));
+
+                if i < length as usize - 1 {
+                    result.push_str(",\n");
+                } else {
+                    result.push('\n');
+                }
+            }
+
+            result.push_str(&format!("{}{}", indent, "]"));
+            Ok(result)
+        }
+    } else if value.is_object() {
+        let value_hash = value.hash(isolate);
+        if seen.contains(&value_hash) {
+            return Ok("[Circular]".bold().red().to_string());
+        }
+        seen.insert(value_hash);
+
         let object = value.as_object().wrap_err("Failed to get object")?;
         let keys = object.keys(true).expect("Failed to get keys");
-        for key in 0..keys.len() {
-            let key: Value = keys.get(key).expect("Failed to get key");
+        let length = keys.len();
+
+        if length == 0 {
+            return Ok(format!("{}", "{}"));
+        }
+
+        let mut entries = Vec::new();
+        for i in 0..length {
+            let key: Value = keys.get(i).expect("Failed to get key");
             let value: Value = object.get(key.clone()).expect("Failed to get value");
 
             let key_string: String = key.into(isolate).expect("Failed to convert key");
-            result.push_str(&format!("{}{}: ", indent, key_string));
-            let value_string = value_to_string(isolate, value, depth + 1)?;
-            result.push_str(&value_string);
+            let value_string = value_to_string(isolate, value, depth + 1, seen, true)?;
+            entries.push(format!("{}: {}", key_string.blue(), value_string));
+        }
+
+        if length <= 3 && entries.iter().map(|s| s.len()).sum::<usize>() <= 60 {
+            let inline_entries = entries.join(", ");
+            Ok(format!("{}", format!("{{ {} }}", inline_entries)))
+        } else {
+            let mut result = String::new();
+            result.push_str(&format!("{}", "{\n"));
+
+            for (i, entry) in entries.iter().enumerate() {
+                result.push_str(&format!("{}{}", next_indent, entry));
+
+                if i < length as usize - 1 {
+                    result.push_str(",\n");
+                } else {
+                    result.push('\n');
+                }
+            }
+
+            result.push_str(&format!("{}{}", indent, "}"));
+            Ok(result)
         }
     } else {
         let value_string: String = value.into(isolate).expect("Failed to convert value");
-        result.push_str(&format!("{}{}", indent, value_string));
+        Ok(format!("{}{}", indent, value_string))
     }
-
-    Ok(result)
 }
 
 #[tokio::main]
@@ -66,10 +185,17 @@ impl GuiApp {
             let args: Vec<String> = args
                 .iter()
                 .map(|arg| {
-                    value_to_string(&rust_log_isolate, arg.clone(), 0).expect("Failed to convert")
+                    value_to_string(
+                        &rust_log_isolate,
+                        arg.clone(),
+                        0,
+                        &mut HashSet::new(),
+                        false,
+                    )
+                    .expect("Failed to convert")
                 })
                 .collect();
-            let args = args.join(", ");
+            let args = args.join(" ");
             println!("{}", args);
             Ok(())
         });
@@ -100,6 +226,11 @@ impl GuiApp {
         // Try to initialize the Vue app
         let vue_init_code = r#"
 const { createRenderer, defineComponent, h, reactive } = Vue;
+
+console.log('Vue version:', Vue.version);
+console.log('Testing console.log');
+console.log('Small array:', [1, 2, 3]);
+console.log('Small object:', { a: 1 });
 
 const globalState = reactive({
     a: 1
@@ -226,7 +357,7 @@ function circularReplacer() {
         return value;
     };
 }
-console.log(JSON.stringify(root, circularReplacer(), 2));
+console.log(root);
 "#;
 
         let result = isolate
