@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use color_eyre::owo_colors::OwoColorize;
 use eframe::egui;
@@ -171,6 +171,7 @@ async fn main() -> Result<()> {
 
 struct GuiApp {
     isolate: MiniV8,
+    value: Rc<RefCell<i32>>,
 }
 
 impl GuiApp {
@@ -216,6 +217,27 @@ impl GuiApp {
             .global()
             .set("console", console_obj)
             .expect("Failed to set console");
+
+        // Set value function
+        let rust_set_value_isolate = isolate.clone();
+        let value = Rc::new(RefCell::new(0));
+        let value_clone = value.clone();
+        let rust_set_value = isolate.create_function(move |invocation| {
+            let args = invocation.args;
+            if args.len() != 1 {
+                return Err(mini_v8::Error::ExternalError("Expected 1 argument".into()));
+            }
+            let value = args.get(0);
+            let value: i32 = value
+                .into(&rust_set_value_isolate)
+                .expect("Failed to convert value");
+            *value_clone.borrow_mut() = value;
+            Ok(())
+        });
+        isolate
+            .global()
+            .set("setValue", rust_set_value)
+            .expect("Failed to set setValue");
 
         // Set up the JS virtual machine
         let vue_code = include_str!("../assets/vue.global.js");
@@ -358,6 +380,9 @@ function circularReplacer() {
     };
 }
 console.log(root);
+
+// Send value to Rust
+setValue(42);
 "#;
 
         let result = isolate
@@ -376,14 +401,15 @@ console.log(root);
             println!("Microtasks took: {:?}", elapsed);
         }
 
-        Ok(Self { isolate })
+        Ok(Self { isolate, value })
     }
 }
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Hello World!");
+            ui.heading("Hello World from eframe!");
+            ui.label(format!("Value: {}", *self.value.borrow()));
         });
     }
 }
