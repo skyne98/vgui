@@ -123,6 +123,10 @@ impl Object {
             _phantom: PhantomData,
         })
     }
+
+    pub fn handle(&self) -> v8::Global<v8::Object> {
+        self.handle.clone()
+    }
 }
 
 impl fmt::Debug for Object {

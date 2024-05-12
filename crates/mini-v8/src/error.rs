@@ -45,19 +45,18 @@ impl Error {
     pub fn to_value(self, mv8: &MiniV8) -> Value {
         match self {
             Error::Value(value) => value,
-            Error::ToJsConversionError { .. } |
-            Error::FromJsConversionError { .. } => {
+            Error::ToJsConversionError { .. } | Error::FromJsConversionError { .. } => {
                 let object = mv8.create_object();
                 let _ = object.set("name", "TypeError");
                 let _ = object.set("message", self.to_string());
                 Value::Object(object)
-            },
+            }
             _ => {
                 let object = mv8.create_object();
                 let _ = object.set("name", "Error");
                 let _ = object.set("message", self.to_string());
                 Value::Object(object)
-            },
+            }
         }
     }
 
@@ -77,14 +76,14 @@ impl fmt::Display for Error {
         match self {
             Error::ToJsConversionError { from, to } => {
                 write!(fmt, "error converting {} to JavaScript {}", from, to)
-            },
+            }
             Error::FromJsConversionError { from, to } => {
                 write!(fmt, "error converting JavaScript {} to {}", from, to)
-            },
+            }
             Error::Timeout => write!(fmt, "evaluation timed out"),
             Error::RecursiveMutCallback => write!(fmt, "mutable callback called recursively"),
             Error::InvalidTimeout => write!(fmt, "invalid request for evaluation timeout"),
-            Error::ExternalError(ref err) => err.fmt(fmt),
+            Error::ExternalError(ref err) => write!(fmt, "external error ({})", err),
             Error::Value(v) => write!(fmt, "JavaScript runtime error ({})", v.type_name()),
         }
     }

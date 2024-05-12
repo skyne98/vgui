@@ -1873,23 +1873,19 @@ var Vue = (function (exports) {
         return start;
     }
     function queueJob(job) {
-        console.log('queueJob', job)
         if (!queue.length || !queue.includes(
             job,
             isFlushing && job.allowRecurse ? flushIndex + 1 : flushIndex
         )) {
-            console.log('queueJob push')
             if (job.id == null) {
                 queue.push(job);
             } else {
                 queue.splice(findInsertionIndex(job.id), 0, job);
             }
-            console.log('queueJob queueFlush')
             queueFlush();
         }
     }
     function queueFlush() {
-        console.log('queueFlush')
         if (!isFlushing && !isFlushPending) {
             isFlushPending = true;
             currentFlushPromise = resolvedPromise.then(flushJobs);
@@ -1969,7 +1965,6 @@ var Vue = (function (exports) {
         return diff;
     };
     function flushJobs(seen) {
-        console.log('flushJobs', queue)
         isFlushPending = false;
         isFlushing = true;
         {
@@ -1987,12 +1982,6 @@ var Vue = (function (exports) {
                     callWithErrorHandling(job, null, 14);
                 }
             }
-        } catch (e) {
-            // debug, print info and throw error
-            console.log('error in flushJobs', e.toString())
-            console.log('queue', queue)
-
-            throw e;
         } finally {
             flushIndex = 0;
             queue.length = 0;

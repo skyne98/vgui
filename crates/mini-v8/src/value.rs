@@ -1,8 +1,5 @@
-use v8::Handle;
-
 use crate::*;
 use std::iter::FromIterator;
-use std::num::NonZero;
 use std::ops::{Deref, DerefMut};
 use std::{fmt, slice, vec};
 
