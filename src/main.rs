@@ -7,7 +7,7 @@ use std::{
 use color_eyre::owo_colors::OwoColorize;
 use eframe::egui;
 use eyre::{Context, ContextCompat, Result};
-use mini_v8::{Error as MiniV8Error, MiniV8, Value};
+use mini_v8::{Error as MiniV8Error, MiniV8, ToValue, Value};
 
 use colored::*;
 
@@ -177,6 +177,8 @@ async fn main() -> Result<()> {
 enum Element {
     Root,
     Label(String),
+    Vertical,
+    Horizontal,
 }
 type ElementRef = Rc<RefCell<Element>>;
 type ElementId = usize;
@@ -289,6 +291,18 @@ impl GuiApp {
             match tag.as_str() {
                 "label" => {
                     let element = Element::Label("".to_string());
+                    let element_ref = Rc::new(RefCell::new(element));
+                    let element_id = id as ElementId;
+                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                }
+                "vertical" => {
+                    let element = Element::Vertical;
+                    let element_ref = Rc::new(RefCell::new(element));
+                    let element_id = id as ElementId;
+                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                }
+                "horizontal" => {
+                    let element = Element::Horizontal;
                     let element_ref = Rc::new(RefCell::new(element));
                     let element_id = id as ElementId;
                     elements_clone.borrow_mut().insert(element_id, element_ref);
@@ -413,6 +427,74 @@ impl GuiApp {
             .set("setElementText", rust_set_element_text)
             .expect("Failed to set setElementText");
 
+        // Get parent node (parentNode)
+        let rust_node_ops_isolate = isolate.clone();
+        let element_children_clone = elements_children.clone();
+        let rust_parent_node = isolate.create_function(move |invocation| {
+            let args = invocation.args;
+            if args.len() != 1 {
+                return Err(MiniV8Error::ExternalError("Expected 1 argument".into()));
+            }
+            let node = args.get(0);
+            let node: ElementId = node
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert node");
+
+            println!("---------------------");
+            println!("Getting parent node of: {}", node);
+            println!("---------------------");
+
+            let children_borrow = element_children_clone.borrow();
+            for (parent, children) in children_borrow.iter() {
+                if children.contains(&node) {
+                    return Ok((*parent)
+                        .to_value(&rust_node_ops_isolate)
+                        .expect("Failed to convert"));
+                }
+            }
+
+            Ok(Value::Null)
+        });
+        isolate
+            .global()
+            .set("parentNode", rust_parent_node)
+            .expect("Failed to set parentNode");
+
+        // Get next sibling (nextSibling)
+        let rust_node_ops_isolate = isolate.clone();
+        let element_children_clone = elements_children.clone();
+        let rust_next_sibling = isolate.create_function(move |invocation| {
+            let args = invocation.args;
+            if args.len() != 1 {
+                return Err(MiniV8Error::ExternalError("Expected 1 argument".into()));
+            }
+            let node = args.get(0);
+            let node: ElementId = node
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert node");
+
+            println!("---------------------");
+            println!("Getting next sibling of: {}", node);
+            println!("---------------------");
+
+            let children_borrow = element_children_clone.borrow();
+            for (_, children) in children_borrow.iter() {
+                if let Some(index) = children.iter().position(|id| id == &node) {
+                    if index < children.len() - 1 {
+                        return Ok((children[index + 1])
+                            .to_value(&rust_node_ops_isolate)
+                            .expect("Failed to convert"));
+                    }
+                }
+            }
+
+            Ok(Value::Null)
+        });
+        isolate
+            .global()
+            .set("nextSibling", rust_next_sibling)
+            .expect("Failed to set nextSibling");
+
         // Set up the JS virtual machine
         let vue_code = include_str!("../assets/vue.global.js");
         isolate
@@ -446,7 +528,9 @@ try {
         // Create a node in the non-DOM environment
         createElement(tag) {
             const id = nextId++; 
-            return { id: createElement(id, tag) };
+            let element = { id: createElement(id, tag) };
+            elementToId.set(element, id);
+            return element;
         },
         // Insert child into parent, possibly using some custom API
         insert(child, parent, anchor) {
@@ -474,14 +558,10 @@ try {
             el.attributes[key] = nextValue;
         },
         parentNode(node) {
-            console.log(`Getting parent node of: ${node.tag}`);
-            // Return the parent node
-            return node;
+            return getId(parentNode(node.id));
         },
         nextSibling(node) {
-            console.log(`Getting next sibling of: ${node.tag}`);
-            // Return the next sibling node
-            return node;
+            return getId(nextSibling(node.id));
         },
         querySelector(selector) {
             console.log(`Querying selector: ${selector}`);
@@ -503,6 +583,9 @@ try {
                 console.log(`Computing sum: ${globalState.a} + ${b.value}`);
                 return globalState.a + b.value;
             });
+            const a = computed(() => {
+                return globalState.a;
+            });
 
             // mount and unmount lifecycle hooks
             Vue.onMounted(() => {
@@ -520,9 +603,18 @@ try {
                 console.log('Next tick:', { a: globalState.a, b: b.value });
             });
 
-            return { b, sum, changeB };
+            return { a, b, sum, changeB };
         },
-        template: '<label>Sum is {{sum}}</label>',
+        template: `
+            <vertical>
+                <horizontal>
+                    <label>Value of a:</label>
+                    <label>{{ a }}</label>
+                </horizontal>
+                <label>Value of b: {{ b }}</label>
+                <label>Sum: {{ sum }}</label>
+            </vertical>
+        `,
     };
 
     // The 'root' object would represent the top level of your app
@@ -561,7 +653,7 @@ try {
             println!("Microtasks took: {:?}", elapsed);
         }
 
-        let mut this = Self {
+        let this = Self {
             isolate,
             value,
             elements,
@@ -585,6 +677,12 @@ try {
             }
             Element::Label(label) => {
                 println!("{}Label: {}", indent, label);
+            }
+            Element::Vertical => {
+                println!("{}Vertical", indent);
+            }
+            Element::Horizontal => {
+                println!("{}Horizontal", indent);
             }
         }
 
@@ -619,6 +717,28 @@ try {
             }
             Element::Label(label) => {
                 ui.label(label);
+            }
+            Element::Vertical => {
+                ui.vertical(|ui| {
+                    let elements_children_borrow = self.elements_children.borrow();
+                    let children = elements_children_borrow.get(&element_id);
+                    if let Some(children) = children {
+                        for child_id in children {
+                            self.render_element(ui, *child_id);
+                        }
+                    }
+                });
+            }
+            Element::Horizontal => {
+                ui.horizontal(|ui| {
+                    let elements_children_borrow = self.elements_children.borrow();
+                    let children = elements_children_borrow.get(&element_id);
+                    if let Some(children) = children {
+                        for child_id in children {
+                            self.render_element(ui, *child_id);
+                        }
+                    }
+                });
             }
         }
     }
