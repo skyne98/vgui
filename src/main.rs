@@ -383,6 +383,50 @@ impl GuiApp {
             .set("insertElement", rust_insert)
             .expect("Failed to set insert");
 
+        // Remove element (removeElement)
+        let rust_node_ops_isolate = isolate.clone();
+        let elements_clone = elements.clone();
+        let elements_children_clone = elements_children.clone();
+        let rust_remove = isolate.create_function(move |invocation| {
+            let args = invocation.args;
+            if args.len() != 1 {
+                return Err(MiniV8Error::ExternalError("Expected 1 argument".into()));
+            }
+            let child = args.get(0);
+            let child: ElementId = child
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert child");
+
+            // find parent
+            let mut parent = None;
+            let mut elements_children_borrow = elements_children_clone.borrow_mut();
+            for (parent_id, children) in elements_children_borrow.iter_mut() {
+                if let Some(index) = children.iter().position(|id| id == &child) {
+                    parent = Some(*parent_id);
+                    children.remove(index);
+                    break;
+                }
+            }
+
+            let elements_borrow = elements_clone.borrow();
+            let child_element = elements_borrow.get(&child).expect("Failed to get child");
+            let parent_element = parent
+                .map(|id| elements_borrow.get(&id))
+                .flatten()
+                .expect("Failed to get parent");
+
+            println!("---------------------");
+            println!("Removing element: {:?}", child_element);
+            println!("++ Parent: {:?}", parent_element);
+            println!("---------------------");
+
+            Ok(())
+        });
+        isolate
+            .global()
+            .set("removeElement", rust_remove)
+            .expect("Failed to set removeElement");
+
         // Set element text (setElementText)
         let rust_node_ops_isolate = isolate.clone();
         let elements_clone = elements.clone();
@@ -534,12 +578,11 @@ try {
         },
         // Insert child into parent, possibly using some custom API
         insert(child, parent, anchor) {
-            insertElement(child.id, parent.id, anchor);
+            insertElement(child.id, parent.id, anchor?.id);
         },
         // Remove an element, adapting to your backend's capabilities
         remove(child) {
-            console.log(`Removing element: ${child.tag}`);
-            // Implement removal logic according to your environment
+            removeElement(child.id);
         },
         createText(text) {
             console.log(`Creating text node: ${text}`);
@@ -613,6 +656,9 @@ try {
                 </horizontal>
                 <label>Value of b: {{ b }}</label>
                 <label>Sum: {{ sum }}</label>
+                <label v-if="a > 1">a is greater than 1</label>
+                <label v-else-if="a === 1">a is equal to 1</label>
+                <label v-else>a is less than 1</label>
             </vertical>
         `,
     };
