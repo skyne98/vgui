@@ -666,7 +666,16 @@ try {
     // The 'root' object would represent the top level of your app
     const root = { id: 0 };
     console.log(`Root object created: ${JSON.stringify(root, null, 2)}`);
-    const appInstance = createApp(App).mount(root);
+    const unmountedApp = createApp(App);
+    unmountedApp.config.isCustomElement = tag => {
+        console.log(`Checking if ${tag} is a custom element`);
+        return [
+            'label',
+            'vertical',
+            'horizontal'
+        ].includes(tag);
+    };
+    const appInstance = unmountedApp.mount(root);
 
     // Update a and b values
     console.log(appInstance);
