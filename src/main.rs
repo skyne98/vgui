@@ -803,6 +803,27 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_element(ui, 0);
+
+            // now some prototyping code for events
+            ui.horizontal(|ui| {
+                ui.label("Value:");
+                let value = *self.value.borrow();
+                let button = ui.button("Increment").on_hover_text("Increment value");
+                if button.clicked() {
+                    *self.value.borrow_mut() = value + 1;
+                }
+                if button.hovered() {
+                    ui.label("Hovering over the button");
+                    ui.spinner();
+                }
+            });
+            // a panel, with a button which passes through the click event
+            ui.horizontal(|ui| {
+                // make the background red
+                ui.style_mut().visuals.widgets.noninteractive.bg_fill = egui::Color32::RED;
+                egui::Stroke::new(1.0, egui::Color32::WHITE);
+                ui.label("Panel:");
+            });
         });
     }
 }
