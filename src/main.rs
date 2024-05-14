@@ -5,9 +5,9 @@ use std::{
 };
 
 use color_eyre::owo_colors::OwoColorize;
-use eframe::egui;
+use eframe::egui::{self, Response};
 use eyre::{Context, ContextCompat, Result};
-use mini_v8::{Error as MiniV8Error, MiniV8, ToValue, Value};
+use mini_v8::{Error as MiniV8Error, Function, MiniV8, ToValue, Value};
 
 use colored::*;
 
@@ -176,10 +176,18 @@ async fn main() -> Result<()> {
 #[derive(Debug, Clone)]
 enum Element {
     Root,
+    Hidden(String),
+    Comment(String),
     Label(String),
+    Button(String),
     Vertical,
     Horizontal,
 }
+struct Events {
+    click: Option<Function>,
+    hover: Option<Function>,
+}
+
 type ElementRef = Rc<RefCell<Element>>;
 type ElementId = usize;
 type Elements = HashMap<ElementId, ElementRef>;
@@ -187,12 +195,14 @@ type ElementsRef = Rc<RefCell<Elements>>;
 type ElementsVec = Vec<ElementId>;
 type ElementsChildren = HashMap<ElementId, ElementsVec>;
 type ElementsChildrenRef = Rc<RefCell<ElementsChildren>>;
+type ElementEvents = HashMap<ElementId, Events>;
+type ElementEventsRef = Rc<RefCell<ElementEvents>>;
 
 struct GuiApp {
     isolate: MiniV8,
-    value: Rc<RefCell<i32>>,
     elements: ElementsRef,
     elements_children: ElementsChildrenRef,
+    element_events: ElementEventsRef,
 }
 
 impl GuiApp {
@@ -239,33 +249,13 @@ impl GuiApp {
             .set("console", console_obj)
             .expect("Failed to set console");
 
-        // Set value function
-        let rust_set_value_isolate = isolate.clone();
-        let value = Rc::new(RefCell::new(0));
-        let value_clone = value.clone();
-        let rust_set_value = isolate.create_function(move |invocation| {
-            let args = invocation.args;
-            if args.len() != 1 {
-                return Err(MiniV8Error::ExternalError("Expected 1 argument".into()));
-            }
-            let value = args.get(0);
-            let value: i32 = value
-                .into(&rust_set_value_isolate)
-                .expect("Failed to convert value");
-            *value_clone.borrow_mut() = value;
-            Ok(())
-        });
-        isolate
-            .global()
-            .set("setValue", rust_set_value)
-            .expect("Failed to set setValue");
-
         // Virtual DOM CRUD
         let elements = Rc::new(RefCell::new(HashMap::new()));
         elements
             .borrow_mut()
             .insert(0, Rc::new(RefCell::new(Element::Root)));
         let elements_children = Rc::new(RefCell::new(HashMap::new()));
+        let element_events = Rc::new(RefCell::new(HashMap::new()));
 
         // Create element (createElement)
         let rust_node_ops_isolate = isolate.clone();
@@ -303,6 +293,24 @@ impl GuiApp {
                 }
                 "horizontal" => {
                     let element = Element::Horizontal;
+                    let element_ref = Rc::new(RefCell::new(element));
+                    let element_id = id as ElementId;
+                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                }
+                "button" => {
+                    let element = Element::Button("".to_string());
+                    let element_ref = Rc::new(RefCell::new(element));
+                    let element_id = id as ElementId;
+                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                }
+                "hidden" => {
+                    let element = Element::Hidden("".to_string());
+                    let element_ref = Rc::new(RefCell::new(element));
+                    let element_id = id as ElementId;
+                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                }
+                "comment" => {
+                    let element = Element::Comment("".to_string());
                     let element_ref = Rc::new(RefCell::new(element));
                     let element_id = id as ElementId;
                     elements_clone.borrow_mut().insert(element_id, element_ref);
@@ -457,6 +465,15 @@ impl GuiApp {
                 Element::Label(label) => {
                     *label = text.clone();
                 }
+                Element::Button(label) => {
+                    *label = text.clone();
+                }
+                Element::Hidden(label) => {
+                    *label = text.clone();
+                }
+                Element::Comment(comment) => {
+                    *comment = text.clone();
+                }
                 _ => {
                     return Err(MiniV8Error::ExternalError(
                         format!("Cannot set text on element: {:?}", element_mut).into(),
@@ -539,6 +556,79 @@ impl GuiApp {
             .set("nextSibling", rust_next_sibling)
             .expect("Failed to set nextSibling");
 
+        // Property patching (patchProp)
+        let rust_node_ops_isolate = isolate.clone();
+        let elements_clone = elements.clone();
+        let elements_events_clone = element_events.clone();
+        let rust_patch_prop = isolate.create_function(move |invocation| {
+            let args = invocation.args;
+            if args.len() != 4 {
+                return Err(MiniV8Error::ExternalError("Expected 4 arguments".into()));
+            }
+            let element = args.get(0);
+            let key = args.get(1);
+            let prev_value = args.get(2);
+            let next_value = args.get(3);
+            let element: ElementId = element
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert element");
+            let key: String = key
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert key");
+            let prev_value: Value = prev_value
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert prev_value");
+            let next_value: Value = next_value
+                .into(&rust_node_ops_isolate)
+                .expect("Failed to convert next_value");
+
+            let elements_borrow = elements_clone.borrow();
+            let element_ref = elements_borrow
+                .get(&element)
+                .expect("Failed to get element");
+
+            let element_mut = element_ref.borrow_mut();
+            println!("---------------------");
+            println!(
+                "Patching prop: {} from {:?} to {:?}",
+                key, prev_value, next_value
+            );
+            println!("Element: {:?}", element_mut);
+            println!("---------------------");
+
+            // Check for events (onClick, onHover)
+            let mut events_borrow = elements_events_clone.borrow_mut();
+            // create the events object if it doesn't exist
+            let events = events_borrow.entry(element).or_insert_with(|| Events {
+                click: None,
+                hover: None,
+            });
+            // now add or remove the event
+            match key.as_str() {
+                "onClick" => {
+                    if next_value.is_function() {
+                        events.click = Some(next_value.as_function().unwrap().clone());
+                    } else {
+                        events.click = None;
+                    }
+                }
+                "onHover" => {
+                    if next_value.is_function() {
+                        events.hover = Some(next_value.as_function().unwrap().clone());
+                    } else {
+                        events.hover = None;
+                    }
+                }
+                _ => {}
+            }
+
+            Ok(())
+        });
+        isolate
+            .global()
+            .set("patchProp", rust_patch_prop)
+            .expect("Failed to set patchProp");
+
         // Set up the JS virtual machine
         let vue_code = include_str!("../assets/vue.global.js");
         isolate
@@ -554,10 +644,6 @@ try {
     console.log('Testing console.log');
     console.log('Small array:', [1, 2, 3]);
     console.log('Small object:', { a: 1 });
-
-    const globalState = reactive({
-        a: 1
-    });
 
     const elementToId = new Map();
     let nextId = 1;
@@ -585,20 +671,26 @@ try {
             removeElement(child.id);
         },
         createText(text) {
-            console.log(`Creating text node: ${text}`);
-            return { type: 'text', text };
+            const id = nextId++;
+            let element = { id: createElement(id, 'hidden') };
+            setElementText(element.id, text);
+            return element;
+        },
+        createComment(text) {
+            const id = nextId++;
+            let element = { id: createElement(id, 'comment') };
+            setElementText(element.id, text);
+            return element;
         },
         setText(node, text) {
-            console.log(`Setting text: ${text}`);
-            node.text = text;
+            console.log('Setting text for node:', node);
+            setElementText(node.id, text);
         },
         setElementText(el, text) {
             setElementText(el.id, text);
         },
         patchProp(el, key, prevValue, nextValue) {
-            let nextValueType = typeof nextValue;
-            console.log(`Patching prop: ${key} from ${prevValue} to ${nextValue} of type ${nextValueType}`);
-            el.attributes[key] = nextValue;
+            patchProp(el.id, key, prevValue, nextValue);
         },
         parentNode(node) {
             return getId(parentNode(node.id));
@@ -607,9 +699,7 @@ try {
             return getId(nextSibling(node.id));
         },
         querySelector(selector) {
-            console.log(`Querying selector: ${selector}`);
-            // Return the first element that matches the selector
-            return { tag: 'div', children: [], attributes: {} };
+            throw new Error(`Not implemented, trying to query selector: ${selector}`);
         },
     };
 
@@ -621,44 +711,22 @@ try {
             console.log('App setup:');
             const { ref, computed, nextTick } = Vue;
 
-            const b = ref(2);
-            const sum = computed(() => {
-                console.log(`Computing sum: ${globalState.a} + ${b.value}`);
-                return globalState.a + b.value;
-            });
-            const a = computed(() => {
-                return globalState.a;
-            });
+            const value = ref(0);
+            const additionalControls = ref(false);
 
-            // mount and unmount lifecycle hooks
-            Vue.onMounted(() => {
-                console.log('App mounted:', { a: globalState.a, b: b.value });
-            });
-            Vue.onUnmounted(() => {
-                console.log('App unmounted:', { a: globalState.a, b: b.value });
-            });
-
-            function changeB() {
-                b.value = 3;
-            }
-
-            nextTick(() => {
-                console.log('Next tick:', { a: globalState.a, b: b.value });
-            });
-
-            return { a, b, sum, changeB };
+            return { value, additionalControls };
         },
         template: `
             <vertical>
-                <horizontal>
-                    <label>Value of a:</label>
-                    <label>{{ a }}</label>
-                </horizontal>
-                <label>Value of b: {{ b }}</label>
-                <label>Sum: {{ sum }}</label>
-                <label v-if="a > 1">a is greater than 1</label>
-                <label v-else-if="a === 1">a is equal to 1</label>
-                <label v-else>a is less than 1</label>
+                <label>Value: {{ value }}</label>
+                <button @click="value++">Increment</button>
+
+                // Additional controls
+                <button @click="additionalControls = !additionalControls">Toggle Controls</button>
+                <vertical v-if="additionalControls">
+                    <label>Additional Controls</label>
+                    <button @click="value--">Decrement</button>
+                </vertical>
             </vertical>
         `,
     };
@@ -672,18 +740,13 @@ try {
         return [
             'label',
             'vertical',
-            'horizontal'
+            'horizontal',
+            'button',
+            'hidden',
+            'comment',
         ].includes(tag);
     };
     const appInstance = unmountedApp.mount(root);
-
-    // Update a and b values
-    console.log(appInstance);
-    globalState.a = 2;
-    appInstance.changeB();
-
-    // Send value to Rust
-    setValue(42);
 } catch (e) {
     const errorMessage = `Error Message: ${e.message}`;
     const stackTrace = `Stack Trace:\n${e.stack}`;
@@ -696,23 +759,11 @@ try {
             .eval::<_, Value>(vue_init_code)
             .map_err(|e| eyre::eyre!(format!("MiniV8 error: {:#?}", e)))?;
 
-        // run the promise microtasks
-        for _ in 0..10 {
-            println!("=====================");
-            println!("Running microtasks...");
-            println!("=====================");
-            let start = std::time::Instant::now();
-            isolate.run_microtasks();
-            let elapsed = start.elapsed();
-            println!("=====================");
-            println!("Microtasks took: {:?}", elapsed);
-        }
-
         let this = Self {
             isolate,
-            value,
             elements,
             elements_children,
+            element_events,
         };
         this.print_tree(0, 0);
         Ok(this)
@@ -733,11 +784,20 @@ try {
             Element::Label(label) => {
                 println!("{}Label: {}", indent, label);
             }
+            Element::Button(label) => {
+                println!("{}Button: {}", indent, label);
+            }
             Element::Vertical => {
                 println!("{}Vertical", indent);
             }
             Element::Horizontal => {
                 println!("{}Horizontal", indent);
+            }
+            Element::Hidden(label) => {
+                println!("{}Hidden: {}", indent, label);
+            }
+            Element::Comment(comment) => {
+                println!("{}Comment: {}", indent, comment);
             }
         }
 
@@ -754,32 +814,37 @@ try {
 
     // Walking the tree with a stack of contexts
     // Will be used later for rendering with eframe/egui
-    fn render_element(&self, ui: &mut egui::Ui, element_id: ElementId) {
+    fn render_element(&self, ui: &mut egui::Ui, element_id: ElementId) -> Vec<Response> {
         let elements_borrow = self.elements.borrow();
         let element_ref = elements_borrow
             .get(&element_id)
             .expect("Failed to get element");
         let element = element_ref.borrow();
+        let mut responses = Vec::new();
+
         match &*element {
             Element::Root => {
                 let elements_children_borrow = self.elements_children.borrow();
                 let children = elements_children_borrow.get(&element_id);
                 if let Some(children) = children {
                     for child_id in children {
-                        self.render_element(ui, *child_id);
+                        let local_responses = self.render_element(ui, *child_id);
+                        responses.extend(local_responses);
                     }
                 }
             }
-            Element::Label(label) => {
-                ui.label(label);
-            }
+            Element::Label(label) => responses.push(ui.label(label)),
+            Element::Button(label) => responses.push(ui.button(label)),
+            Element::Hidden(_) => { /* do nothing */ }
+            Element::Comment(_) => { /* do nothing */ }
             Element::Vertical => {
                 ui.vertical(|ui| {
                     let elements_children_borrow = self.elements_children.borrow();
                     let children = elements_children_borrow.get(&element_id);
                     if let Some(children) = children {
                         for child_id in children {
-                            self.render_element(ui, *child_id);
+                            let local_responses = self.render_element(ui, *child_id);
+                            responses.extend(local_responses);
                         }
                     }
                 });
@@ -790,12 +855,40 @@ try {
                     let children = elements_children_borrow.get(&element_id);
                     if let Some(children) = children {
                         for child_id in children {
-                            self.render_element(ui, *child_id);
+                            let local_responses = self.render_element(ui, *child_id);
+                            responses.extend(local_responses);
                         }
                     }
                 });
             }
         }
+
+        // Hook up events
+        let element_events_borrow = self.element_events.borrow();
+        let events = element_events_borrow.get(&element_id);
+        if let Some(events) = events {
+            for response in &responses {
+                if let Some(click) = &events.click {
+                    if response.clicked() {
+                        click
+                            .call::<(), ()>(().into())
+                            .expect("Failed to call click event");
+                    }
+                }
+                if let Some(hover) = &events.hover {
+                    if response.hovered() {
+                        hover
+                            .call::<(), ()>(().into())
+                            .expect("Failed to call hover event");
+                    }
+                }
+            }
+        }
+
+        responses
+    }
+    fn run_microtasks(&self) {
+        self.isolate.run_microtasks();
     }
 }
 
@@ -803,27 +896,7 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_element(ui, 0);
-
-            // now some prototyping code for events
-            ui.horizontal(|ui| {
-                ui.label("Value:");
-                let value = *self.value.borrow();
-                let button = ui.button("Increment").on_hover_text("Increment value");
-                if button.clicked() {
-                    *self.value.borrow_mut() = value + 1;
-                }
-                if button.hovered() {
-                    ui.label("Hovering over the button");
-                    ui.spinner();
-                }
-            });
-            // a panel, with a button which passes through the click event
-            ui.horizontal(|ui| {
-                // make the background red
-                ui.style_mut().visuals.widgets.noninteractive.bg_fill = egui::Color32::RED;
-                egui::Stroke::new(1.0, egui::Color32::WHITE);
-                ui.label("Panel:");
-            });
+            self.run_microtasks();
         });
     }
 }
