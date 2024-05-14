@@ -704,21 +704,25 @@ try {
     };
 
     const { render, createApp } = createRenderer(nodeOps);
-    const { ref } = Vue;
+    const { watch, ref } = Vue;
 
     const App = {
         setup() {
             console.log('App setup:');
-            const { ref, computed, nextTick } = Vue;
 
             const value = ref(0);
             const additionalControls = ref(false);
 
-            return { value, additionalControls };
+            const label = ref(null);
+            watch(label, (value) => {
+                console.log('Label changed:', value);
+            });
+
+            return { value, additionalControls, label };
         },
         template: `
             <vertical>
-                <label>Value: {{ value }}</label>
+                <label ref="label">Value: {{ value }}</label>
                 <button @click="value++">Increment</button>
 
                 // Additional controls
