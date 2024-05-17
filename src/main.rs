@@ -975,7 +975,6 @@ impl eframe::App for GuiApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_element(ui, 0);
             self.run_microtasks();
-            // self.print_tree(0, 0);
 
             // Text editor test
             let mut code = String::new();
