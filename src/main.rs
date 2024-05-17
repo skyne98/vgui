@@ -7,7 +7,7 @@ use std::{
 use color_eyre::owo_colors::OwoColorize;
 use eframe::egui::{self, Response};
 use eyre::{Context, ContextCompat, Result};
-use mini_v8::{Error as MiniV8Error, Function, MiniV8, ToValue, Value};
+use mini_v8::{Error as MiniV8Error, Function, MiniV8, ToValue, Value, Variadic};
 
 use colored::*;
 
@@ -183,10 +183,12 @@ enum Element {
     Vertical,
     Horizontal,
     Separator,
+    TextEdit(String),
 }
 struct Events {
     click: Option<Function>,
     hover: Option<Function>,
+    input: Option<Function>,
 }
 
 type ElementRef = Rc<RefCell<Element>>;
@@ -320,6 +322,11 @@ impl GuiApp {
                     elements_clone
                         .borrow_mut()
                         .insert(id, Rc::new(RefCell::new(Element::Separator)));
+                }
+                "text-edit" => {
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::TextEdit("".to_string()))));
                 }
                 _ => {
                     return Err(MiniV8Error::ExternalError(
@@ -480,6 +487,9 @@ impl GuiApp {
                 Element::Comment(comment) => {
                     *comment = text.clone();
                 }
+                Element::TextEdit(label) => {
+                    *label = text.clone();
+                }
                 _ => {
                     return Err(MiniV8Error::ExternalError(
                         format!("Cannot set text on element: {:?}", element_mut).into(),
@@ -621,6 +631,7 @@ impl GuiApp {
             let events = events_borrow.entry(element).or_insert_with(|| Events {
                 click: None,
                 hover: None,
+                input: None,
             });
             // now add or remove the event
             match key.as_str() {
@@ -636,6 +647,13 @@ impl GuiApp {
                         events.hover = Some(next_value.as_function().unwrap().clone());
                     } else {
                         events.hover = None;
+                    }
+                }
+                "onInput" => {
+                    if next_value.is_function() {
+                        events.input = Some(next_value.as_function().unwrap().clone());
+                    } else {
+                        events.input = None;
                     }
                 }
                 _ => {}
@@ -735,6 +753,7 @@ try {
             console.log('App setup:');
 
             const value = ref(0);
+            const stringValue = ref('Hello, Vue!');
             const additionalControls = ref(false);
 
             const label = ref(null);
@@ -742,18 +761,21 @@ try {
                 console.log('Label changed:', value);
             });
 
-            return { value, additionalControls, label };
+            return { value, additionalControls, label, stringValue };
         },
         template: `
             <vertical>
                 <label ref="label">Value: {{ value }}</label>
                 <button @click="value++">Increment</button>
+                <button @click="value = 0">Reset</button>
+                <label>String Value: {{ stringValue }}</label>
 
                 // Additional controls
                 <button @click="additionalControls = !additionalControls">Toggle Controls</button>
                 <vertical v-if="additionalControls">
                     <label>Additional Controls</label>
                     <button @click="value--">Decrement</button>
+                    <text-edit @input="(v) => stringValue = v">{{ stringValue }}</text-edit>
                 </vertical>
                 <separator></separator>
             </vertical>
@@ -762,7 +784,7 @@ try {
 
     // The 'root' object would represent the top level of your app
     const root = { id: 0 };
-    console.log(`Root object created: ${JSON.stringify(root, null, 2)}`);
+    console.log(`Root object created:`, root);
     const unmountedApp = createApp(App);
     unmountedApp.config.isCustomElement = tag => {
         console.log(`Checking if ${tag} is a custom element`);
@@ -774,6 +796,7 @@ try {
             'hidden',
             'comment',
             'separator',
+            'text-edit',
         ].includes(tag);
     };
     const appInstance = unmountedApp.mount(root);
@@ -832,6 +855,9 @@ try {
             Element::Separator => {
                 println!("{}Separator({})", indent, element_id);
             }
+            Element::TextEdit(label) => {
+                println!("{}TextEdit({}): {}", indent, element_id, label);
+            }
         }
 
         let elements_children_borrow = self.elements_children.borrow();
@@ -852,10 +878,10 @@ try {
         let element_ref = elements_borrow
             .get(&element_id)
             .expect("Failed to get element");
-        let element = element_ref.borrow();
+        let mut element = element_ref.borrow_mut();
         let mut responses = Vec::new();
 
-        match &*element {
+        match &mut *element {
             Element::Root => {
                 let elements_children_borrow = self.elements_children.borrow();
                 let children = elements_children_borrow.get(&element_id);
@@ -866,8 +892,8 @@ try {
                     }
                 }
             }
-            Element::Label(label) => responses.push(ui.label(label)),
-            Element::Button(label) => responses.push(ui.button(label)),
+            Element::Label(label) => responses.push(ui.label(label.clone())),
+            Element::Button(label) => responses.push(ui.button(label.clone())),
             Element::Hidden(_) => { /* do nothing */ }
             Element::Comment(_) => { /* do nothing */ }
             Element::Vertical => {
@@ -897,6 +923,10 @@ try {
             Element::Separator => {
                 ui.separator();
             }
+            Element::TextEdit(label) => {
+                let response = ui.text_edit_singleline(label);
+                responses.push(response);
+            }
         }
 
         // Hook up events
@@ -916,6 +946,18 @@ try {
                         hover
                             .call::<(), ()>(().into())
                             .expect("Failed to call hover event");
+                    }
+                }
+                if let Some(input) = &events.input {
+                    if let Element::TextEdit(label) = &*element {
+                        if response.lost_focus() {
+                            input
+                                .call::<Variadic<Value>, ()>(Variadic::from_vec(vec![label
+                                    .clone()
+                                    .to_value(&self.isolate)
+                                    .expect("Failed to convert text edit value")]))
+                                .expect("Failed to call input event");
+                        }
                     }
                 }
             }
