@@ -182,6 +182,7 @@ enum Element {
     Button(String),
     Vertical,
     Horizontal,
+    Separator,
 }
 struct Events {
     click: Option<Function>,
@@ -203,6 +204,28 @@ struct GuiApp {
     elements: ElementsRef,
     elements_children: ElementsChildrenRef,
     element_events: ElementEventsRef,
+}
+
+macro_rules! define_js_function {
+    ($isolate:expr, $name:expr, $arg_len:expr, |$($arg_name:ident: $arg_type:ty),*| $body:expr) => {
+        {
+            let isolate_clone = $isolate.clone();
+            let function = $isolate.create_function(move |invocation| {
+                if invocation.args.len() != $arg_len {
+                    return Err(MiniV8Error::ExternalError(format!("Expected {} arguments", $arg_len).into()));
+                }
+
+                let mut arg_idx = 0;
+                $(
+                    let $arg_name: $arg_type = invocation.args.get(arg_idx).into(&isolate_clone).expect(&format!("Failed to convert argument {}", arg_idx));
+                    arg_idx += 1;
+                )*
+
+                $body
+            });
+            $isolate.global().set($name, function).expect(&format!("Failed to set {}", $name));
+        }
+    };
 }
 
 impl GuiApp {
@@ -254,66 +277,49 @@ impl GuiApp {
         elements
             .borrow_mut()
             .insert(0, Rc::new(RefCell::new(Element::Root)));
-        let elements_children = Rc::new(RefCell::new(HashMap::new()));
+        let elements_children: Rc<RefCell<HashMap<usize, Vec<usize>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
         let element_events = Rc::new(RefCell::new(HashMap::new()));
 
         // Create element (createElement)
-        let rust_node_ops_isolate = isolate.clone();
         let elements_clone = elements.clone();
-        let rust_create_element = isolate.create_function(move |invocation| {
-            let args = invocation.args;
-            if args.len() != 2 {
-                return Err(MiniV8Error::ExternalError("Expected 2 argument".into()));
-            }
-
-            let id = args.get(0);
-            let id: ElementId = id
-                .into(&rust_node_ops_isolate)
-                .expect("Failed to convert id");
-            let tag = args.get(1);
-            let tag: String = tag
-                .into(&rust_node_ops_isolate)
-                .expect("Failed to convert tag");
-
-            println!("---------------------");
+        define_js_function!(isolate, "createElement", 2, |id: ElementId, tag: String| {
             println!("Creating element: {}", tag);
-
             match tag.as_str() {
                 "label" => {
-                    let element = Element::Label("".to_string());
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Label("".to_string()))));
                 }
                 "vertical" => {
-                    let element = Element::Vertical;
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Vertical)));
                 }
                 "horizontal" => {
-                    let element = Element::Horizontal;
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Horizontal)));
                 }
                 "button" => {
-                    let element = Element::Button("".to_string());
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Button("".to_string()))));
                 }
                 "hidden" => {
-                    let element = Element::Hidden("".to_string());
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Hidden("".to_string()))));
                 }
                 "comment" => {
-                    let element = Element::Comment("".to_string());
-                    let element_ref = Rc::new(RefCell::new(element));
-                    let element_id = id as ElementId;
-                    elements_clone.borrow_mut().insert(element_id, element_ref);
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Comment("".to_string()))));
+                }
+                "separator" => {
+                    elements_clone
+                        .borrow_mut()
+                        .insert(id, Rc::new(RefCell::new(Element::Separator)));
                 }
                 _ => {
                     return Err(MiniV8Error::ExternalError(
@@ -321,22 +327,9 @@ impl GuiApp {
                     ));
                 }
             }
-
-            let element = (*elements_clone
-                .borrow()
-                .get(&id)
-                .expect("Failed to get element")
-                .borrow())
-            .clone();
-            println!("Element created: {:?}", element);
-            println!("---------------------");
-
             Ok(id)
         });
-        isolate
-            .global()
-            .set("createElement", rust_create_element)
-            .expect("Failed to set createElement");
+
         // Insert element (insertElement)
         let rust_node_ops_isolate = isolate.clone();
         let elements_clone = elements.clone();
@@ -365,12 +358,22 @@ impl GuiApp {
             let anchor_element = anchor.map(|id| elements_borrow.get(&id)).flatten();
 
             println!("---------------------");
-            println!("Inserting element: {:?}", child_element);
-            println!("++ Parent: {:?}", parent_element);
-            println!("++ Anchor: {:?}", anchor_element);
+            println!("Inserting element: {} - {:?}", child, child_element);
+            println!("++ Parent: {} - {:?}", parent, parent_element);
+            println!("++ Anchor: {:?} - {:?}", anchor, anchor_element);
             println!("---------------------");
 
+            // Ensure the child is not already inserted elsewhere
             let mut elements_children_borrow = elements_children_clone.borrow_mut();
+            for (parent_id, children) in elements_children_borrow.iter_mut() {
+                if children.contains(&child) {
+                    panic!(
+                        "Child element {} is already a child of parent element {}",
+                        child, parent_id
+                    );
+                }
+            }
+
             let parent_children = elements_children_borrow
                 .entry(parent)
                 .or_insert_with(Vec::new);
@@ -424,8 +427,8 @@ impl GuiApp {
                 .expect("Failed to get parent");
 
             println!("---------------------");
-            println!("Removing element: {:?}", child_element);
-            println!("++ Parent: {:?}", parent_element);
+            println!("Removing element: {} - {:?}", child, child_element);
+            println!("++ Parent: {:?} - {:?}", parent, parent_element);
             println!("---------------------");
 
             Ok(())
@@ -459,7 +462,10 @@ impl GuiApp {
 
             let mut element_mut = element_ref.borrow_mut();
             println!("---------------------");
-            println!("Setting element text: {:?} to {}", element_mut, text);
+            println!(
+                "Setting element text: {} - {:?} to {}",
+                element, element_mut, text
+            );
             println!("---------------------");
             match &mut *element_mut {
                 Element::Label(label) => {
@@ -490,6 +496,7 @@ impl GuiApp {
 
         // Get parent node (parentNode)
         let rust_node_ops_isolate = isolate.clone();
+        let elements_clone = elements.clone();
         let element_children_clone = elements_children.clone();
         let rust_parent_node = isolate.create_function(move |invocation| {
             let args = invocation.args;
@@ -500,9 +507,13 @@ impl GuiApp {
             let node: ElementId = node
                 .into(&rust_node_ops_isolate)
                 .expect("Failed to convert node");
+            let elements_borrow = elements_clone.borrow();
+            let node_element = elements_borrow
+                .get(&node)
+                .expect("Failed to get node element");
 
             println!("---------------------");
-            println!("Getting parent node of: {}", node);
+            println!("Getting parent node of: {} - {:?}", node, node_element);
             println!("---------------------");
 
             let children_borrow = element_children_clone.borrow();
@@ -523,6 +534,7 @@ impl GuiApp {
 
         // Get next sibling (nextSibling)
         let rust_node_ops_isolate = isolate.clone();
+        let elements_clone = elements.clone();
         let element_children_clone = elements_children.clone();
         let rust_next_sibling = isolate.create_function(move |invocation| {
             let args = invocation.args;
@@ -533,23 +545,30 @@ impl GuiApp {
             let node: ElementId = node
                 .into(&rust_node_ops_isolate)
                 .expect("Failed to convert node");
+            let elements_borrow = elements_clone.borrow();
+            let node_element = elements_borrow
+                .get(&node)
+                .expect("Failed to get node element");
 
             println!("---------------------");
-            println!("Getting next sibling of: {}", node);
-            println!("---------------------");
+            println!("Getting next sibling of: {} - {:?}", node, node_element);
 
             let children_borrow = element_children_clone.borrow();
+            let mut sibling = Value::Null;
             for (_, children) in children_borrow.iter() {
                 if let Some(index) = children.iter().position(|id| id == &node) {
                     if index < children.len() - 1 {
-                        return Ok((children[index + 1])
+                        sibling = (children[index + 1])
                             .to_value(&rust_node_ops_isolate)
-                            .expect("Failed to convert"));
+                            .expect("Failed to convert");
                     }
                 }
             }
 
-            Ok(Value::Null)
+            println!("Next sibling: {:?}", sibling);
+            println!("---------------------");
+
+            Ok(sibling)
         });
         isolate
             .global()
@@ -593,7 +612,7 @@ impl GuiApp {
                 "Patching prop: {} from {:?} to {:?}",
                 key, prev_value, next_value
             );
-            println!("Element: {:?}", element_mut);
+            println!("Element: {} - {:?}", element, element_mut);
             println!("---------------------");
 
             // Check for events (onClick, onHover)
@@ -646,12 +665,16 @@ try {
     console.log('Small object:', { a: 1 });
 
     const elementToId = new Map();
+    const idToElement = new Map();
     let nextId = 1;
     function getId(element) {
         if (!elementToId.has(element)) {
             elementToId.set(element, nextId++);
         }
         return elementToId.get(element);
+    }
+    function getElementById(id) {
+        return idToElement.get(id);
     }
 
     const nodeOps = {
@@ -660,6 +683,7 @@ try {
             const id = nextId++; 
             let element = { id: createElement(id, tag) };
             elementToId.set(element, id);
+            idToElement.set(id, element);
             return element;
         },
         // Insert child into parent, possibly using some custom API
@@ -693,10 +717,10 @@ try {
             patchProp(el.id, key, prevValue, nextValue);
         },
         parentNode(node) {
-            return getId(parentNode(node.id));
+            return getElementById(parentNode(node.id));
         },
         nextSibling(node) {
-            return getId(nextSibling(node.id));
+            return getElementById(nextSibling(node.id));
         },
         querySelector(selector) {
             throw new Error(`Not implemented, trying to query selector: ${selector}`);
@@ -731,6 +755,7 @@ try {
                     <label>Additional Controls</label>
                     <button @click="value--">Decrement</button>
                 </vertical>
+                <separator></separator>
             </vertical>
         `,
     };
@@ -748,6 +773,7 @@ try {
             'button',
             'hidden',
             'comment',
+            'separator',
         ].includes(tag);
     };
     const appInstance = unmountedApp.mount(root);
@@ -783,25 +809,28 @@ try {
         let element = element_ref.borrow();
         match &*element {
             Element::Root => {
-                println!("{}Root", indent);
+                println!("{}Root({})", indent, element_id);
             }
             Element::Label(label) => {
-                println!("{}Label: {}", indent, label);
+                println!("{}Label({}): {}", indent, element_id, label);
             }
             Element::Button(label) => {
-                println!("{}Button: {}", indent, label);
+                println!("{}Button({}): {}", indent, element_id, label);
             }
             Element::Vertical => {
-                println!("{}Vertical", indent);
+                println!("{}Vertical({})", indent, element_id);
             }
             Element::Horizontal => {
-                println!("{}Horizontal", indent);
+                println!("{}Horizontal({})", indent, element_id);
             }
             Element::Hidden(label) => {
-                println!("{}Hidden: {}", indent, label);
+                println!("{}Hidden({}): {}", indent, element_id, label);
             }
             Element::Comment(comment) => {
-                println!("{}Comment: {}", indent, comment);
+                println!("{}Comment({}): {}", indent, element_id, comment);
+            }
+            Element::Separator => {
+                println!("{}Separator({})", indent, element_id);
             }
         }
 
@@ -865,6 +894,9 @@ try {
                     }
                 });
             }
+            Element::Separator => {
+                ui.separator();
+            }
         }
 
         // Hook up events
@@ -901,6 +933,12 @@ impl eframe::App for GuiApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_element(ui, 0);
             self.run_microtasks();
+            // self.print_tree(0, 0);
+
+            // Text editor test
+            let mut code = String::new();
+            let label = ui.label("Enter code:");
+            ui.text_edit_singleline(&mut code).labelled_by(label.id);
         });
     }
 }
